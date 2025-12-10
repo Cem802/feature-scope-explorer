@@ -3,9 +3,10 @@ import * as vscode from 'vscode';
 
 export interface FeatureConfig {
   name: string;
-  filter: string;
+  filters: string[];
   paths: string[];
   exactMatch: boolean;
+  filter?: string;
 }
 
 export interface FileNode {
@@ -23,7 +24,8 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
   public readonly dropMimeTypes = ['text/uri-list'];
   public readonly dragMimeTypes: string[] = [];
 
-  private filterTerm = '';
+  private refreshDebounce?: NodeJS.Timeout;
+  private filters: string[] = [];
   private exactMatch = false;
   private addedPaths: Set<string> = new Set();
   private configs: FeatureConfig[] = [];
@@ -39,6 +41,7 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.loadPersistedConfigs();
+    this.registerWatchers();
   }
 
   setTreeView(view: vscode.TreeView<FileNode>): void {
@@ -68,7 +71,7 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
   }
 
   getCurrentFilter(): string {
-    return this.filterTerm;
+    return this.filters.join(', ');
   }
 
   isExactMatch(): boolean {
@@ -76,21 +79,36 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
   }
 
   async setFilter(filter: string): Promise<void> {
-    this.filterTerm = filter.trim();
+    this.filters = this.parseFilters(filter);
     await this.refresh();
     this.autoSaveActiveConfig();
+    this.updateViewTitle();
   }
 
   async clearFilter(): Promise<void> {
-    this.filterTerm = '';
+    this.filters = [];
     await this.refresh();
     this.autoSaveActiveConfig();
+    this.updateViewTitle();
+  }
+
+  async clearAll(): Promise<void> {
+    this.filters = [];
+    this.exactMatch = false;
+    this.addedPaths.clear();
+    this.targetFolders.clear();
+    this.explicitFiles.clear();
+    this.ancestors.clear();
+    await this.refresh();
+    this.autoSaveActiveConfig();
+    this.updateViewTitle();
   }
 
   toggleExactMatch(): void {
     this.exactMatch = !this.exactMatch;
     this.refresh();
     this.autoSaveActiveConfig();
+    this.updateViewTitle();
   }
 
   addCurrentFile(uri: vscode.Uri | undefined): void {
@@ -103,24 +121,43 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
     this.autoSaveActiveConfig();
   }
 
-  async newConfig(): Promise<void> {
-    const name = await vscode.window.showInputBox({ prompt: 'Config name' });
-    if (!name) {
+  async addFolder(target?: FileNode | vscode.Uri): Promise<void> {
+    if (target) {
+      const fsPath = target instanceof vscode.Uri ? target.fsPath : target.uri.fsPath;
+      this.addTrackedPath(fsPath);
+      await this.refresh();
+      this.autoSaveActiveConfig();
       return;
     }
-    const filter = (await vscode.window.showInputBox({ prompt: 'Filter term for this config' })) ?? '';
-    const newConfig: FeatureConfig = {
-      name,
-      filter,
-      paths: Array.from(this.addedPaths),
-      exactMatch: this.exactMatch,
-    };
-    this.configs = [...this.configs.filter((c) => c.name !== name), newConfig];
-    this.activeConfigName = name;
-    this.filterTerm = filter;
-    await this.persistConfigs();
+    const result = await vscode.window.showOpenDialog({
+      canSelectFiles: false,
+      canSelectFolders: true,
+      canSelectMany: true,
+      openLabel: 'Add Folder to Feature Scope',
+    });
+    if (!result || result.length === 0) {
+      return;
+    }
+    for (const uri of result) {
+      this.addTrackedPath(uri.fsPath);
+    }
+    await this.refresh();
+    this.autoSaveActiveConfig();
+  }
+
+  async newConfig(): Promise<void> {
+    // Start a fresh, unsaved scope so the user can set filters and decide to save later.
+    this.filters = [];
+    this.exactMatch = false;
+    this.addedPaths.clear();
+    this.targetFolders.clear();
+    this.explicitFiles.clear();
+    this.ancestors.clear();
+    this.activeConfigName = undefined;
+    await this.context.workspaceState.update(ACTIVE_KEY, undefined);
     await this.refresh();
     this.updateViewTitle();
+    vscode.window.showInformationMessage('Started a new Feature Scope. Set filters or add items, then Save Config if you want to keep it.');
   }
 
   async loadConfig(): Promise<void> {
@@ -138,7 +175,9 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
     if (!config) {
       return;
     }
-    this.applyConfig(config);
+    await this.applyConfig(config);
+    await this.context.workspaceState.update(ACTIVE_KEY, this.activeConfigName);
+    vscode.window.showInformationMessage(`Loaded Feature Scope config "${config.name}".`);
   }
 
   async saveCurrentConfig(): Promise<void> {
@@ -151,7 +190,7 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
     }
     const config: FeatureConfig = {
       name: this.activeConfigName,
-      filter: this.filterTerm,
+      filters: this.filters,
       paths: Array.from(this.addedPaths),
       exactMatch: this.exactMatch,
     };
@@ -217,9 +256,12 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
       return [];
     }
     if (!element) {
-      return folders.map((folder) =>
-        this.createNode(folder.uri, true, 0, this.isWithinTarget(this.normalize(folder.uri.fsPath)))
-      );
+      const topLevel: FileNode[] = [];
+      for (const folder of folders) {
+        const children = await this.getDirectoryChildren(folder.uri, -1, false);
+        topLevel.push(...children);
+      }
+      return topLevel;
     }
     if (!element.isDirectory) {
       return [];
@@ -228,33 +270,7 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
       return [];
     }
 
-    try {
-      const entries = await vscode.workspace.fs.readDirectory(element.uri);
-      const children: FileNode[] = [];
-      for (const [name, fileType] of entries) {
-        if (name === '.git') {
-          continue;
-        }
-        const childUri = vscode.Uri.joinPath(element.uri, name);
-        const childPath = this.normalize(childUri.fsPath);
-        const isDir = fileType === vscode.FileType.Directory;
-        const includeByScope = this.shouldInclude(childPath, isDir, element.allowChildren);
-        if (!includeByScope) {
-          continue;
-        }
-        const allowAllDescendants = element.allowChildren || this.isWithinTarget(childPath);
-        children.push(this.createNode(childUri, isDir, element.depth + 1, allowAllDescendants));
-      }
-      return children.sort((a, b) => {
-        if (a.isDirectory === b.isDirectory) {
-          return a.uri.fsPath.localeCompare(b.uri.fsPath);
-        }
-        return a.isDirectory ? -1 : 1;
-      });
-    } catch (error) {
-      vscode.window.showErrorMessage(`Unable to read ${element.uri.fsPath}`);
-      return [];
-    }
+    return this.getDirectoryChildren(element.uri, element.depth, element.allowChildren);
   }
 
   private createNode(uri: vscode.Uri, isDirectory: boolean, depth: number, allowChildren = false): FileNode {
@@ -268,8 +284,11 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
 
     this.addedPaths.forEach((p) => this.addPathToSets(p));
 
-    if (this.filterTerm) {
+    if (this.filters.length > 0) {
       const patterns = this.getGlobPatterns();
+      if (patterns.length === 0) {
+        return;
+      }
       const results = await Promise.all(patterns.map((pattern) => vscode.workspace.findFiles(pattern)));
       for (const group of results) {
         for (const uri of group) {
@@ -280,29 +299,38 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
   }
 
   private getGlobPatterns(): string[] {
-    if (this.exactMatch) {
-      return [`**/${this.filterTerm}/**`, `**/${this.filterTerm}`];
+    if (this.filters.length === 0) {
+      return [];
     }
-    return [`**/*${this.filterTerm}*/**`, `**/*${this.filterTerm}*`];
+    if (this.exactMatch) {
+      return this.filters.flatMap((term) => [`**/${term}/**`, `**/${term}`]);
+    }
+    return this.filters.flatMap((term) => [`**/*${term}*/**`, `**/*${term}*`]);
   }
 
   private registerMatch(uri: vscode.Uri): void {
     const normalized = this.normalize(uri.fsPath);
+    if (this.isHiddenPath(normalized)) {
+      return;
+    }
     if (normalized.includes(`${path.sep}.git${path.sep}`)) {
       return;
     }
     const segments = normalized.split(path.sep);
-    const matchSegment = segments.find((segment) =>
-      this.exactMatch ? segment.toLowerCase() === this.filterTerm.toLowerCase() : segment.toLowerCase().includes(this.filterTerm.toLowerCase())
-    );
-    if (matchSegment) {
-      const idx = segments.findIndex((seg) => seg === matchSegment);
-      const matchedPath = segments.slice(0, idx + 1).join(path.sep);
-      const folderTarget = idx === segments.length - 1 && path.extname(matchSegment)
-        ? path.dirname(matchedPath)
-        : matchedPath;
+    for (let i = 0; i < segments.length; i++) {
+      const segment = segments[i];
+      const lower = segment.toLowerCase();
+      const matched = this.filters.some((filter) =>
+        this.exactMatch ? lower === filter.toLowerCase() : lower.includes(filter.toLowerCase())
+      );
+      if (!matched) {
+        continue;
+      }
+      const matchedPath = segments.slice(0, i + 1).join(path.sep);
+      const folderTarget = i === segments.length - 1 && path.extname(segment) ? path.dirname(matchedPath) : matchedPath;
       this.targetFolders.add(folderTarget);
       this.collectAncestors(folderTarget);
+      break;
     }
     this.explicitFiles.add(normalized);
     this.collectAncestors(normalized);
@@ -374,13 +402,93 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
     return path.normalize(fsPath);
   }
 
+  private isHiddenName(name: string): boolean {
+    return name.startsWith('.');
+  }
+
+  private isHiddenPath(fsPath: string): boolean {
+    return this.normalize(fsPath)
+      .split(path.sep)
+      .some((segment) => this.isHiddenName(segment));
+  }
+
+  private parseFilters(input: string | string[] | undefined): string[] {
+    if (!input) {
+      return [];
+    }
+    const parts = Array.isArray(input) ? input : input.split(/[,\s]+/);
+    return parts.map((p) => p.trim()).filter(Boolean);
+  }
+
+  private async getDirectoryChildren(uri: vscode.Uri, parentDepth: number, parentAllowsAll: boolean): Promise<FileNode[]> {
+    try {
+      const entries = await vscode.workspace.fs.readDirectory(uri);
+      const children: FileNode[] = [];
+      for (const [name, fileType] of entries) {
+        const childUri = vscode.Uri.joinPath(uri, name);
+        const childPath = this.normalize(childUri.fsPath);
+        const isDir = fileType === vscode.FileType.Directory;
+        const hidden = this.isHiddenName(name);
+        if (hidden && !this.addedPaths.has(childPath)) {
+          continue;
+        }
+        const includeByScope = this.shouldInclude(childPath, isDir, parentAllowsAll);
+        if (!includeByScope) {
+          continue;
+        }
+        const allowAllDescendants = parentAllowsAll || this.isWithinTarget(childPath);
+        children.push(this.createNode(childUri, isDir, parentDepth + 1, allowAllDescendants));
+      }
+      return this.sortNodes(children);
+    } catch (error) {
+      vscode.window.showErrorMessage(`Unable to read ${uri.fsPath}`);
+      return [];
+    }
+  }
+
+  private sortNodes(nodes: FileNode[]): FileNode[] {
+    return nodes.sort((a, b) => {
+      if (a.isDirectory === b.isDirectory) {
+        return a.uri.fsPath.localeCompare(b.uri.fsPath);
+      }
+      return a.isDirectory ? -1 : 1;
+    });
+  }
+
+  private registerWatchers(): void {
+    const watcher = vscode.workspace.createFileSystemWatcher('**/*');
+    this.context.subscriptions.push(
+      watcher,
+      watcher.onDidCreate(() => this.scheduleRefreshOnFsChange()),
+      watcher.onDidDelete(() => this.scheduleRefreshOnFsChange()),
+      watcher.onDidChange(() => this.scheduleRefreshOnFsChange()),
+      vscode.workspace.onDidRenameFiles(() => this.scheduleRefreshOnFsChange())
+    );
+  }
+
+  private scheduleRefreshOnFsChange(): void {
+    if (!this.shouldAutoRefreshOnFsChange()) {
+      return;
+    }
+    if (this.refreshDebounce) {
+      clearTimeout(this.refreshDebounce);
+    }
+    this.refreshDebounce = setTimeout(() => {
+      void this.refresh();
+    }, 400);
+  }
+
+  private shouldAutoRefreshOnFsChange(): boolean {
+    return this.filters.length > 0 || this.addedPaths.size > 0;
+  }
+
   private loadPersistedConfigs(): void {
     const configs = this.context.workspaceState.get<FeatureConfig[]>(CONFIG_KEY, []);
     this.configs = configs ?? [];
     this.activeConfigName = this.context.workspaceState.get<string | undefined>(ACTIVE_KEY);
     const activeConfig = this.configs.find((c) => c.name === this.activeConfigName);
     if (activeConfig) {
-      this.applyConfig(activeConfig);
+      void this.applyConfig(activeConfig);
     }
   }
 
@@ -389,13 +497,14 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
     await this.context.workspaceState.update(ACTIVE_KEY, this.activeConfigName);
   }
 
-  private applyConfig(config: FeatureConfig): void {
-    this.filterTerm = config.filter;
+  private async applyConfig(config: FeatureConfig): Promise<void> {
+    this.filters = this.parseFilters(config.filters ?? config.filter);
     this.exactMatch = config.exactMatch;
     this.addedPaths = new Set(config.paths.map((p) => this.normalize(p)));
     this.activeConfigName = config.name;
+    await this.context.workspaceState.update(ACTIVE_KEY, this.activeConfigName);
     this.updateViewTitle();
-    this.refresh();
+    await this.refresh();
   }
 
   private updateViewTitle(): void {
@@ -403,6 +512,9 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
       return;
     }
     this.view.title = this.activeConfigName ? `Feature Scope (${this.activeConfigName})` : 'Feature Scope';
+    const filterLabel = this.filters.length > 0 ? this.filters.join(', ') : 'No filters';
+    const matchLabel = this.exactMatch ? 'Exact' : 'Contains';
+    this.view.description = `${matchLabel} • ${filterLabel}`;
   }
 
   private async autoSaveActiveConfig(): Promise<void> {
@@ -411,7 +523,7 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
     }
     const updated: FeatureConfig = {
       name: this.activeConfigName,
-      filter: this.filterTerm,
+      filters: this.filters,
       paths: Array.from(this.addedPaths),
       exactMatch: this.exactMatch,
     };

@@ -30,7 +30,8 @@
       },
       {
         "command": "featureScope.setFilter",
-        "title": "Feature Scope: Set Filter"
+        "title": "Feature Scope: Set Filter",
+        "icon": "$(filter)"
       },
       {
         "command": "featureScope.clearFilter",
@@ -39,58 +40,94 @@
       },
       {
         "command": "featureScope.toggleExactMatch",
-        "title": "Feature Scope: Toggle Exact Folder Match"
+        "title": "Feature Scope: Toggle Exact Folder Match",
+        "icon": "$(whole-word)"
       },
       {
         "command": "featureScope.addCurrentFile",
         "title": "Feature Scope: Add Current File"
       },
       {
+        "command": "featureScope.addFolder",
+        "title": "Feature Scope: Add Folder",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "featureScope.clearAll",
+        "title": "Feature Scope: Clear Filter and Added Items",
+        "icon": "$(close-all)"
+      },
+      {
         "command": "featureScope.newConfig",
-        "title": "Feature Scope: New Config"
+        "title": "Feature Scope: New Config",
+        "icon": "$(add)"
       },
       {
         "command": "featureScope.loadConfig",
-        "title": "Feature Scope: Load Config"
+        "title": "Feature Scope: Load Config",
+        "icon": "$(list-selection)"
       },
       {
         "command": "featureScope.saveCurrent",
-        "title": "Feature Scope: Save Current Config"
+        "title": "Feature Scope: Save Current Config",
+        "icon": "$(save)"
       },
       {
         "command": "featureScope.deleteConfig",
-        "title": "Feature Scope: Delete Config"
+        "title": "Feature Scope: Delete Config",
+        "icon": "$(trash)"
       },
       {
         "command": "featureScope.reveal",
         "title": "Reveal in Explorer"
-      },
-      {
-        "command": "featureScope.open",
-        "title": "Open File"
       }
     ],
     "menus": {
       "view/title": [
         {
-          "command": "featureScope.refresh",
+          "command": "featureScope.clearFilter",
           "when": "view == featureScope",
           "group": "navigation@1"
         },
         {
-          "command": "featureScope.clearFilter",
+          "command": "featureScope.clearAll",
           "when": "view == featureScope",
           "group": "navigation@2"
         },
         {
-          "command": "featureScope.loadConfig",
+          "command": "featureScope.setFilter",
           "when": "view == featureScope",
           "group": "navigation@3"
         },
         {
-          "command": "featureScope.newConfig",
+          "command": "featureScope.toggleExactMatch",
           "when": "view == featureScope",
           "group": "navigation@4"
+        },
+        {
+          "command": "featureScope.addFolder",
+          "when": "view == featureScope",
+          "group": "navigation@5"
+        },
+        {
+          "command": "featureScope.newConfig",
+          "when": "view == featureScope",
+          "group": "navigation@6"
+        },
+        {
+          "command": "featureScope.saveCurrent",
+          "when": "view == featureScope",
+          "group": "navigation@7"
+        },
+        {
+          "command": "featureScope.loadConfig",
+          "when": "view == featureScope",
+          "group": "navigation@8"
+        },
+        {
+          "command": "featureScope.deleteConfig",
+          "when": "view == featureScope",
+          "group": "navigation@9"
         }
       ],
       "view/item/context": [
@@ -98,11 +135,13 @@
           "command": "featureScope.reveal",
           "when": "view == featureScope && viewItem == folder",
           "group": "inline"
-        },
+        }
+      ],
+      "explorer/context": [
         {
-          "command": "featureScope.open",
-          "when": "view == featureScope && viewItem == file",
-          "group": "inline"
+          "command": "featureScope.addFolder",
+          "when": "resourceScheme == file",
+          "group": "navigation@99"
         }
       ]
     },
@@ -123,7 +162,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.12.12",
-    "typescript": "^5.4.5",
-    "vscode": "^1.1.41"
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.5"
   }
 }

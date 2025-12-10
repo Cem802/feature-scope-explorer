@@ -31,7 +31,7 @@ function registerCommands(
     vscode.commands.registerCommand('featureScope.setFilter', async () => {
       const current = provider.getCurrentFilter();
       const value = await vscode.window.showInputBox({
-        prompt: 'Filter term (path substring)',
+        prompt: 'Filters (comma or space separated)',
         value: current,
       });
       if (value !== undefined) {
@@ -40,16 +40,23 @@ function registerCommands(
     }),
     vscode.commands.registerCommand('featureScope.clearFilter', () => provider.clearFilter()),
     vscode.commands.registerCommand('featureScope.toggleExactMatch', () => provider.toggleExactMatch()),
+    vscode.commands.registerCommand('featureScope.clearAll', () => provider.clearAll()),
     vscode.commands.registerCommand('featureScope.addCurrentFile', () => {
       const uri = vscode.window.activeTextEditor?.document.uri;
       provider.addCurrentFile(uri);
+    }),
+    vscode.commands.registerCommand('featureScope.addFolder', (nodeOrUri?: FileNode | vscode.Uri) => {
+      if (nodeOrUri instanceof vscode.Uri) {
+        provider.addFolder(nodeOrUri);
+      } else {
+        provider.addFolder(nodeOrUri);
+      }
     }),
     vscode.commands.registerCommand('featureScope.newConfig', () => provider.newConfig()),
     vscode.commands.registerCommand('featureScope.loadConfig', () => provider.loadConfig()),
     vscode.commands.registerCommand('featureScope.saveCurrent', () => provider.saveCurrentConfig()),
     vscode.commands.registerCommand('featureScope.deleteConfig', () => provider.deleteConfig()),
-    vscode.commands.registerCommand('featureScope.reveal', (node?: FileNode) => revealInExplorer(node)),
-    vscode.commands.registerCommand('featureScope.open', (node?: FileNode) => openFile(node))
+    vscode.commands.registerCommand('featureScope.reveal', (node?: FileNode) => revealInExplorer(node))
   );
 }
 
@@ -58,11 +65,4 @@ async function revealInExplorer(node?: FileNode): Promise<void> {
     return;
   }
   await vscode.commands.executeCommand('revealInExplorer', node.uri);
-}
-
-async function openFile(node?: FileNode): Promise<void> {
-  if (!node || node.isDirectory) {
-    return;
-  }
-  await vscode.commands.executeCommand('vscode.open', node.uri);
 }
