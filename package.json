@@ -1,0 +1,129 @@
+{
+  "name": "feature-scope-explorer",
+  "displayName": "FeatureScope Explorer",
+  "description": "Custom tree view for quickly navigating relevant areas of large monorepos.",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:featureScope"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "id": "featureScope",
+          "name": "Feature Scope"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "featureScope.refresh",
+        "title": "Feature Scope: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "featureScope.setFilter",
+        "title": "Feature Scope: Set Filter"
+      },
+      {
+        "command": "featureScope.clearFilter",
+        "title": "Feature Scope: Clear Filter",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "featureScope.toggleExactMatch",
+        "title": "Feature Scope: Toggle Exact Folder Match"
+      },
+      {
+        "command": "featureScope.addCurrentFile",
+        "title": "Feature Scope: Add Current File"
+      },
+      {
+        "command": "featureScope.newConfig",
+        "title": "Feature Scope: New Config"
+      },
+      {
+        "command": "featureScope.loadConfig",
+        "title": "Feature Scope: Load Config"
+      },
+      {
+        "command": "featureScope.saveCurrent",
+        "title": "Feature Scope: Save Current Config"
+      },
+      {
+        "command": "featureScope.deleteConfig",
+        "title": "Feature Scope: Delete Config"
+      },
+      {
+        "command": "featureScope.reveal",
+        "title": "Reveal in Explorer"
+      },
+      {
+        "command": "featureScope.open",
+        "title": "Open File"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "featureScope.refresh",
+          "when": "view == featureScope",
+          "group": "navigation@1"
+        },
+        {
+          "command": "featureScope.clearFilter",
+          "when": "view == featureScope",
+          "group": "navigation@2"
+        },
+        {
+          "command": "featureScope.loadConfig",
+          "when": "view == featureScope",
+          "group": "navigation@3"
+        },
+        {
+          "command": "featureScope.newConfig",
+          "when": "view == featureScope",
+          "group": "navigation@4"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "featureScope.reveal",
+          "when": "view == featureScope && viewItem == folder",
+          "group": "inline"
+        },
+        {
+          "command": "featureScope.open",
+          "when": "view == featureScope && viewItem == file",
+          "group": "inline"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "featureScope.addCurrentFile",
+        "key": "ctrl+shift+f",
+        "mac": "cmd+shift+f",
+        "when": "editorTextFocus"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "echo 'No lint configured'"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.12",
+    "typescript": "^5.4.5",
+    "vscode": "^1.1.41"
+  }
+}
