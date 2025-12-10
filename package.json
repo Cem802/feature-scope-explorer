@@ -3,6 +3,11 @@
   "displayName": "FeatureScope Explorer",
   "description": "Custom tree view for quickly navigating relevant areas of large monorepos.",
   "version": "0.1.0",
+  "publisher": "cem802",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Cem802/feature-scope-explorer"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
