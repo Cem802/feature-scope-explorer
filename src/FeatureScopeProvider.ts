@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { minimatch } from 'minimatch';
 
 export interface FeatureConfig {
   name: string;
@@ -34,6 +35,7 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
   private targetFolders: Set<string> = new Set();
   private explicitFiles: Set<string> = new Set();
   private ancestors: Set<string> = new Set();
+  private excludePatterns: string[] = [];
 
   private view?: vscode.TreeView<FileNode>;
   private readonly changeEmitter = new vscode.EventEmitter<FileNode | undefined | null | void>();
@@ -41,7 +43,9 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.loadPersistedConfigs();
+    this.loadExcludes();
     this.registerWatchers();
+    this.registerConfigurationListeners();
   }
 
   setTreeView(view: vscode.TreeView<FileNode>): void {
@@ -310,6 +314,9 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
 
   private registerMatch(uri: vscode.Uri): void {
     const normalized = this.normalize(uri.fsPath);
+    if (this.isExcludedPath(normalized) && !this.addedPaths.has(normalized)) {
+      return;
+    }
     if (this.isHiddenPath(normalized)) {
       return;
     }
@@ -369,6 +376,9 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
   }
 
   private shouldInclude(fsPath: string, isDir: boolean, parentAllowsAll: boolean): boolean {
+    if (!this.addedPaths.has(fsPath) && this.isExcludedPath(fsPath)) {
+      return false;
+    }
     if (parentAllowsAll) {
       return true;
     }
@@ -402,6 +412,33 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
     return path.normalize(fsPath);
   }
 
+  private loadExcludes(): void {
+    const filesExclude = vscode.workspace.getConfiguration('files').get<Record<string, boolean>>('exclude') ?? {};
+    const searchExclude = vscode.workspace.getConfiguration('search').get<Record<string, boolean>>('exclude') ?? {};
+    const patterns = new Set<string>();
+    for (const [pattern, enabled] of Object.entries(filesExclude)) {
+      if (enabled) {
+        patterns.add(pattern);
+      }
+    }
+    for (const [pattern, enabled] of Object.entries(searchExclude)) {
+      if (enabled) {
+        patterns.add(pattern);
+      }
+    }
+    this.excludePatterns = Array.from(patterns);
+  }
+
+  private registerConfigurationListeners(): void {
+    const disposable = vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration('files.exclude') || event.affectsConfiguration('search.exclude')) {
+        this.loadExcludes();
+        void this.refresh();
+      }
+    });
+    this.context.subscriptions.push(disposable);
+  }
+
   private isHiddenName(name: string): boolean {
     return name.startsWith('.');
   }
@@ -410,6 +447,23 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
     return this.normalize(fsPath)
       .split(path.sep)
       .some((segment) => this.isHiddenName(segment));
+  }
+
+  private isExcludedPath(fsPath: string): boolean {
+    const rel = this.toWorkspaceRelative(fsPath);
+    if (rel === undefined) {
+      return false;
+    }
+    return this.excludePatterns.some((pattern) => minimatch(rel, pattern, { dot: true }));
+  }
+
+  private toWorkspaceRelative(fsPath: string): string | undefined {
+    const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(fsPath));
+    if (!folder) {
+      return undefined;
+    }
+    const rel = path.relative(folder.uri.fsPath, fsPath);
+    return rel.split(path.sep).join('/');
   }
 
   private parseFilters(input: string | string[] | undefined): string[] {
@@ -429,7 +483,7 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
         const childPath = this.normalize(childUri.fsPath);
         const isDir = fileType === vscode.FileType.Directory;
         const hidden = this.isHiddenName(name);
-        if (hidden && !this.addedPaths.has(childPath)) {
+        if ((hidden || this.isExcludedPath(childPath)) && !this.addedPaths.has(childPath)) {
           continue;
         }
         const includeByScope = this.shouldInclude(childPath, isDir, parentAllowsAll);

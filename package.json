@@ -160,6 +160,9 @@
     "watch": "tsc -watch -p ./",
     "lint": "echo 'No lint configured'"
   },
+  "dependencies": {
+    "minimatch": "^9.0.3"
+  },
   "devDependencies": {
     "@types/node": "^20.12.12",
     "@types/vscode": "^1.85.0",

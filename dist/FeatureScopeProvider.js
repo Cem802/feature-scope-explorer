@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.FeatureScopeProvider = void 0;
 const path = __importStar(require("path"));
 const vscode = __importStar(require("vscode"));
+const minimatch_1 = require("minimatch");
 const CONFIG_KEY = 'featureScope.configs';
 const ACTIVE_KEY = 'featureScope.activeConfig';
 const MAX_DEPTH = 40;
@@ -52,13 +53,16 @@ class FeatureScopeProvider {
     targetFolders = new Set();
     explicitFiles = new Set();
     ancestors = new Set();
+    excludePatterns = [];
     view;
     changeEmitter = new vscode.EventEmitter();
     onDidChangeTreeData = this.changeEmitter.event;
     constructor(context) {
         this.context = context;
         this.loadPersistedConfigs();
+        this.loadExcludes();
         this.registerWatchers();
+        this.registerConfigurationListeners();
     }
     setTreeView(view) {
         this.view = view;
@@ -303,6 +307,9 @@ class FeatureScopeProvider {
     }
     registerMatch(uri) {
         const normalized = this.normalize(uri.fsPath);
+        if (this.isExcludedPath(normalized) && !this.addedPaths.has(normalized)) {
+            return;
+        }
         if (this.isHiddenPath(normalized)) {
             return;
         }
@@ -356,6 +363,9 @@ class FeatureScopeProvider {
         }
     }
     shouldInclude(fsPath, isDir, parentAllowsAll) {
+        if (!this.addedPaths.has(fsPath) && this.isExcludedPath(fsPath)) {
+            return false;
+        }
         if (parentAllowsAll) {
             return true;
         }
@@ -386,6 +396,31 @@ class FeatureScopeProvider {
     normalize(fsPath) {
         return path.normalize(fsPath);
     }
+    loadExcludes() {
+        const filesExclude = vscode.workspace.getConfiguration('files').get('exclude') ?? {};
+        const searchExclude = vscode.workspace.getConfiguration('search').get('exclude') ?? {};
+        const patterns = new Set();
+        for (const [pattern, enabled] of Object.entries(filesExclude)) {
+            if (enabled) {
+                patterns.add(pattern);
+            }
+        }
+        for (const [pattern, enabled] of Object.entries(searchExclude)) {
+            if (enabled) {
+                patterns.add(pattern);
+            }
+        }
+        this.excludePatterns = Array.from(patterns);
+    }
+    registerConfigurationListeners() {
+        const disposable = vscode.workspace.onDidChangeConfiguration((event) => {
+            if (event.affectsConfiguration('files.exclude') || event.affectsConfiguration('search.exclude')) {
+                this.loadExcludes();
+                void this.refresh();
+            }
+        });
+        this.context.subscriptions.push(disposable);
+    }
     isHiddenName(name) {
         return name.startsWith('.');
     }
@@ -393,6 +428,21 @@ class FeatureScopeProvider {
         return this.normalize(fsPath)
             .split(path.sep)
             .some((segment) => this.isHiddenName(segment));
+    }
+    isExcludedPath(fsPath) {
+        const rel = this.toWorkspaceRelative(fsPath);
+        if (rel === undefined) {
+            return false;
+        }
+        return this.excludePatterns.some((pattern) => (0, minimatch_1.minimatch)(rel, pattern, { dot: true }));
+    }
+    toWorkspaceRelative(fsPath) {
+        const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(fsPath));
+        if (!folder) {
+            return undefined;
+        }
+        const rel = path.relative(folder.uri.fsPath, fsPath);
+        return rel.split(path.sep).join('/');
     }
     parseFilters(input) {
         if (!input) {
@@ -410,7 +460,7 @@ class FeatureScopeProvider {
                 const childPath = this.normalize(childUri.fsPath);
                 const isDir = fileType === vscode.FileType.Directory;
                 const hidden = this.isHiddenName(name);
-                if (hidden && !this.addedPaths.has(childPath)) {
+                if ((hidden || this.isExcludedPath(childPath)) && !this.addedPaths.has(childPath)) {
                     continue;
                 }
                 const includeByScope = this.shouldInclude(childPath, isDir, parentAllowsAll);
