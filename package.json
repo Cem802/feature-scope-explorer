@@ -2,7 +2,7 @@
   "name": "feature-scope-explorer",
   "displayName": "FeatureScope Explorer",
   "description": "Custom tree view for quickly navigating relevant areas of large monorepos.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "cem802",
   "repository": {
     "type": "git",
