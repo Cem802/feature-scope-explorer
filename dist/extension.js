@@ -46,7 +46,9 @@ function activate(context) {
     });
     provider.setTreeView(treeView);
     registerCommands(context, provider, treeView);
-    provider.refresh();
+    registerActiveEditorSync(context, provider);
+    void provider.refresh();
+    void provider.revealActiveEditor(vscode.window.activeTextEditor);
 }
 function deactivate() {
     // Nothing to clean up.
@@ -73,6 +75,12 @@ function registerCommands(context, provider, treeView) {
             provider.addFolder(nodeOrUri);
         }
     }), vscode.commands.registerCommand('featureScope.newConfig', () => provider.newConfig()), vscode.commands.registerCommand('featureScope.loadConfig', () => provider.loadConfig()), vscode.commands.registerCommand('featureScope.saveCurrent', () => provider.saveCurrentConfig()), vscode.commands.registerCommand('featureScope.deleteConfig', () => provider.deleteConfig()), vscode.commands.registerCommand('featureScope.reveal', (node) => revealInExplorer(node)));
+}
+function registerActiveEditorSync(context, provider) {
+    const disposable = vscode.window.onDidChangeActiveTextEditor((editor) => {
+        void provider.revealActiveEditor(editor);
+    });
+    context.subscriptions.push(disposable);
 }
 async function revealInExplorer(node) {
     if (!node) {

@@ -11,8 +11,10 @@ export function activate(context: vscode.ExtensionContext): void {
   provider.setTreeView(treeView);
 
   registerCommands(context, provider, treeView);
+  registerActiveEditorSync(context, provider);
 
-  provider.refresh();
+  void provider.refresh();
+  void provider.revealActiveEditor(vscode.window.activeTextEditor);
 }
 
 export function deactivate(): void {
@@ -58,6 +60,13 @@ function registerCommands(
     vscode.commands.registerCommand('featureScope.deleteConfig', () => provider.deleteConfig()),
     vscode.commands.registerCommand('featureScope.reveal', (node?: FileNode) => revealInExplorer(node))
   );
+}
+
+function registerActiveEditorSync(context: vscode.ExtensionContext, provider: FeatureScopeProvider): void {
+  const disposable = vscode.window.onDidChangeActiveTextEditor((editor) => {
+    void provider.revealActiveEditor(editor);
+  });
+  context.subscriptions.push(disposable);
 }
 
 async function revealInExplorer(node?: FileNode): Promise<void> {

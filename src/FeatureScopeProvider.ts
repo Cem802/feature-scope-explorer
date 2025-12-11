@@ -36,6 +36,7 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
   private explicitFiles: Set<string> = new Set();
   private ancestors: Set<string> = new Set();
   private excludePatterns: string[] = [];
+  private nodeCache: Map<string, FileNode> = new Map();
 
   private view?: vscode.TreeView<FileNode>;
   private readonly changeEmitter = new vscode.EventEmitter<FileNode | undefined | null | void>();
@@ -225,6 +226,7 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
   }
 
   async refresh(): Promise<void> {
+    this.nodeCache.clear();
     if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
       vscode.window.showInformationMessage('Open folder first to use Feature Scope Explorer.');
       this.changeEmitter.fire();
@@ -232,6 +234,21 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
     }
     await this.calculateScope();
     this.changeEmitter.fire();
+  }
+
+  async revealActiveEditor(editor: vscode.TextEditor | undefined): Promise<void> {
+    if (!editor || editor.document.uri.scheme !== 'file' || !this.view) {
+      return;
+    }
+    const node = await this.findNode(editor.document.uri);
+    if (!node) {
+      return;
+    }
+    try {
+      await this.view.reveal(node, { select: true, focus: false, expand: true });
+    } catch {
+      // Ignore reveal errors that can happen if the tree updates while revealing.
+    }
   }
 
   getTreeItem(element: FileNode): vscode.TreeItem {
@@ -277,8 +294,33 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
     return this.getDirectoryChildren(element.uri, element.depth, element.allowChildren);
   }
 
+  getParent(element: FileNode): FileNode | null {
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(element.uri);
+    if (!workspaceFolder) {
+      return null;
+    }
+    const normalizedParent = this.normalize(path.dirname(element.uri.fsPath));
+    const workspaceRoot = this.normalize(workspaceFolder.uri.fsPath);
+    if (normalizedParent === workspaceRoot || normalizedParent === this.normalize(element.uri.fsPath)) {
+      return null;
+    }
+    const allowChildren = this.isWithinTarget(normalizedParent);
+    const depth = Math.max(element.depth - 1, -1);
+    return this.createNode(vscode.Uri.file(normalizedParent), true, depth, allowChildren);
+  }
+
   private createNode(uri: vscode.Uri, isDirectory: boolean, depth: number, allowChildren = false): FileNode {
-    return { uri, isDirectory, allowChildren, depth };
+    const key = this.normalize(uri.fsPath);
+    const existing = this.nodeCache.get(key);
+    if (existing) {
+      existing.isDirectory = isDirectory;
+      existing.depth = depth;
+      existing.allowChildren = existing.allowChildren || allowChildren;
+      return existing;
+    }
+    const node: FileNode = { uri, isDirectory, allowChildren, depth };
+    this.nodeCache.set(key, node);
+    return node;
   }
 
   private async calculateScope(): Promise<void> {
@@ -472,6 +514,33 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
     }
     const parts = Array.isArray(input) ? input : input.split(/[,\s]+/);
     return parts.map((p) => p.trim()).filter(Boolean);
+  }
+
+  private async findNode(uri: vscode.Uri): Promise<FileNode | undefined> {
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
+    if (!workspaceFolder) {
+      return undefined;
+    }
+    const normalizedTarget = this.normalize(uri.fsPath);
+    const workspaceRoot = this.normalize(workspaceFolder.uri.fsPath);
+    const relativePath = path.relative(workspaceRoot, normalizedTarget);
+    const segments = relativePath.split(path.sep).filter(Boolean);
+    let currentUri = workspaceFolder.uri;
+    let parentDepth = -1;
+    let parentAllowsAll = false;
+    let lastNode: FileNode | undefined;
+    for (const segment of segments) {
+      const children = await this.getDirectoryChildren(currentUri, parentDepth, parentAllowsAll);
+      const next = children.find((child) => path.basename(child.uri.fsPath) === segment);
+      if (!next) {
+        return undefined;
+      }
+      lastNode = next;
+      currentUri = next.uri;
+      parentDepth = next.depth;
+      parentAllowsAll = next.allowChildren;
+    }
+    return lastNode;
   }
 
   private async getDirectoryChildren(uri: vscode.Uri, parentDepth: number, parentAllowsAll: boolean): Promise<FileNode[]> {
