@@ -50,7 +50,8 @@ class FeatureScopeProvider {
     addedPaths = new Set();
     configs = [];
     activeConfigName;
-    targetFolders = new Set();
+    manualFolders = new Set();
+    matchedRoots = new Set();
     explicitFiles = new Set();
     ancestors = new Set();
     excludePatterns = [];
@@ -118,7 +119,8 @@ class FeatureScopeProvider {
         this.filters = [];
         this.exactMatch = false;
         this.addedPaths.clear();
-        this.targetFolders.clear();
+        this.manualFolders.clear();
+        this.matchedRoots.clear();
         this.explicitFiles.clear();
         this.ancestors.clear();
         await this.refresh();
@@ -168,7 +170,7 @@ class FeatureScopeProvider {
         this.filters = [];
         this.exactMatch = false;
         this.addedPaths.clear();
-        this.targetFolders.clear();
+        this.manualFolders.clear();
         this.explicitFiles.clear();
         this.ancestors.clear();
         this.activeConfigName = undefined;
@@ -325,7 +327,7 @@ class FeatureScopeProvider {
         if (normalizedParent === workspaceRoot || normalizedParent === this.normalize(element.uri.fsPath)) {
             return null;
         }
-        const allowChildren = this.isWithinTarget(normalizedParent);
+        const allowChildren = this.isWithinManualFolder(normalizedParent) || this.isWithinMatchedRoot(normalizedParent);
         const depth = Math.max(element.depth - 1, -1);
         return this.createNode(vscode.Uri.file(normalizedParent), true, depth, allowChildren);
     }
@@ -367,7 +369,8 @@ class FeatureScopeProvider {
         return node;
     }
     async calculateScope() {
-        this.targetFolders.clear();
+        this.manualFolders.clear();
+        this.matchedRoots.clear();
         this.explicitFiles.clear();
         this.ancestors.clear();
         this.addedPaths.forEach((p) => this.addPathToSets(p));
@@ -405,6 +408,8 @@ class FeatureScopeProvider {
             return;
         }
         const segments = normalized.split(path.sep);
+        const folderTargets = [];
+        let fileMatched = false;
         for (let i = 0; i < segments.length; i++) {
             const segment = segments[i];
             const lower = segment.toLowerCase();
@@ -412,14 +417,25 @@ class FeatureScopeProvider {
             if (!matched) {
                 continue;
             }
-            const matchedPath = segments.slice(0, i + 1).join(path.sep);
-            const folderTarget = i === segments.length - 1 && path.extname(segment) ? path.dirname(matchedPath) : matchedPath;
-            this.targetFolders.add(folderTarget);
-            this.collectAncestors(folderTarget);
-            break;
+            const isFile = i === segments.length - 1 && path.extname(segment) !== '';
+            if (isFile) {
+                fileMatched = true;
+            }
+            else {
+                folderTargets.push(segments.slice(0, i + 1).join(path.sep));
+            }
         }
-        this.explicitFiles.add(normalized);
-        this.collectAncestors(normalized);
+        if (folderTargets.length === 0 && !fileMatched) {
+            return;
+        }
+        for (const folderTarget of folderTargets) {
+            this.matchedRoots.add(folderTarget);
+            this.collectAncestors(folderTarget);
+        }
+        if (fileMatched) {
+            this.explicitFiles.add(normalized);
+            this.collectAncestors(normalized);
+        }
     }
     addTrackedPath(fsPath) {
         const normalized = this.normalize(fsPath);
@@ -428,16 +444,9 @@ class FeatureScopeProvider {
     }
     addPathToSets(fsPath) {
         const normalized = this.normalize(fsPath);
+        this.manualFolders.add(normalized);
         this.collectAncestors(normalized);
         this.explicitFiles.add(normalized);
-        const parent = path.dirname(normalized);
-        if (fsPath && fsPath === parent) {
-            return;
-        }
-        const lastSegment = path.basename(normalized);
-        if (lastSegment) {
-            this.targetFolders.add(normalized);
-        }
     }
     collectAncestors(fsPath) {
         let current = this.normalize(fsPath);
@@ -457,8 +466,12 @@ class FeatureScopeProvider {
         if (parentAllowsAll) {
             return true;
         }
-        const inTargets = this.isWithinTarget(fsPath);
-        if (inTargets) {
+        const inManual = this.isWithinManualFolder(fsPath);
+        const inMatchedRoot = this.isWithinMatchedRoot(fsPath);
+        if (inManual) {
+            return true;
+        }
+        if (inMatchedRoot) {
             return true;
         }
         if (!isDir && this.explicitFiles.has(fsPath)) {
@@ -469,12 +482,24 @@ class FeatureScopeProvider {
         }
         return false;
     }
-    isWithinTarget(candidate) {
-        for (const folder of this.targetFolders) {
+    isWithinManualFolder(candidate) {
+        for (const folder of this.manualFolders) {
             if (candidate === folder) {
                 return true;
             }
             const relative = path.relative(folder, candidate);
+            if (!relative.startsWith('..') && !path.isAbsolute(relative)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    isWithinMatchedRoot(candidate) {
+        for (const root of this.matchedRoots) {
+            if (candidate === root) {
+                return true;
+            }
+            const relative = path.relative(root, candidate);
             if (!relative.startsWith('..') && !path.isAbsolute(relative)) {
                 return true;
             }
@@ -597,7 +622,7 @@ class FeatureScopeProvider {
                 if (!includeByScope) {
                     continue;
                 }
-                const allowAllDescendants = parentAllowsAll || this.isWithinTarget(childPath);
+                const allowAllDescendants = parentAllowsAll || this.isWithinManualFolder(childPath) || this.isWithinMatchedRoot(childPath);
                 children.push(this.createNode(childUri, isDir, parentDepth + 1, allowAllDescendants));
             }
             return this.sortNodes(children);

@@ -32,7 +32,8 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
   private configs: FeatureConfig[] = [];
   private activeConfigName: string | undefined;
 
-  private targetFolders: Set<string> = new Set();
+  private manualFolders: Set<string> = new Set();
+  private matchedRoots: Set<string> = new Set();
   private explicitFiles: Set<string> = new Set();
   private ancestors: Set<string> = new Set();
   private excludePatterns: string[] = [];
@@ -109,7 +110,8 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
     this.filters = [];
     this.exactMatch = false;
     this.addedPaths.clear();
-    this.targetFolders.clear();
+    this.manualFolders.clear();
+    this.matchedRoots.clear();
     this.explicitFiles.clear();
     this.ancestors.clear();
     await this.refresh();
@@ -163,7 +165,7 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
     this.filters = [];
     this.exactMatch = false;
     this.addedPaths.clear();
-    this.targetFolders.clear();
+    this.manualFolders.clear();
     this.explicitFiles.clear();
     this.ancestors.clear();
     this.activeConfigName = undefined;
@@ -329,7 +331,7 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
     if (normalizedParent === workspaceRoot || normalizedParent === this.normalize(element.uri.fsPath)) {
       return null;
     }
-    const allowChildren = this.isWithinTarget(normalizedParent);
+    const allowChildren = this.isWithinManualFolder(normalizedParent) || this.isWithinMatchedRoot(normalizedParent);
     const depth = Math.max(element.depth - 1, -1);
     return this.createNode(vscode.Uri.file(normalizedParent), true, depth, allowChildren);
   }
@@ -376,7 +378,8 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
   }
 
   private async calculateScope(): Promise<void> {
-    this.targetFolders.clear();
+    this.manualFolders.clear();
+    this.matchedRoots.clear();
     this.explicitFiles.clear();
     this.ancestors.clear();
 
@@ -418,6 +421,8 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
       return;
     }
     const segments = normalized.split(path.sep);
+    const folderTargets: string[] = [];
+    let fileMatched = false;
     for (let i = 0; i < segments.length; i++) {
       const segment = segments[i];
       const lower = segment.toLowerCase();
@@ -427,14 +432,24 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
       if (!matched) {
         continue;
       }
-      const matchedPath = segments.slice(0, i + 1).join(path.sep);
-      const folderTarget = i === segments.length - 1 && path.extname(segment) ? path.dirname(matchedPath) : matchedPath;
-      this.targetFolders.add(folderTarget);
-      this.collectAncestors(folderTarget);
-      break;
+      const isFile = i === segments.length - 1 && path.extname(segment) !== '';
+      if (isFile) {
+        fileMatched = true;
+      } else {
+        folderTargets.push(segments.slice(0, i + 1).join(path.sep));
+      }
     }
-    this.explicitFiles.add(normalized);
-    this.collectAncestors(normalized);
+    if (folderTargets.length === 0 && !fileMatched) {
+      return;
+    }
+    for (const folderTarget of folderTargets) {
+      this.matchedRoots.add(folderTarget);
+      this.collectAncestors(folderTarget);
+    }
+    if (fileMatched) {
+      this.explicitFiles.add(normalized);
+      this.collectAncestors(normalized);
+    }
   }
 
   private addTrackedPath(fsPath: string): void {
@@ -445,16 +460,9 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
 
   private addPathToSets(fsPath: string): void {
     const normalized = this.normalize(fsPath);
+    this.manualFolders.add(normalized);
     this.collectAncestors(normalized);
     this.explicitFiles.add(normalized);
-    const parent = path.dirname(normalized);
-    if (fsPath && fsPath === parent) {
-      return;
-    }
-    const lastSegment = path.basename(normalized);
-    if (lastSegment) {
-      this.targetFolders.add(normalized);
-    }
   }
 
   private collectAncestors(fsPath: string): void {
@@ -476,8 +484,12 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
     if (parentAllowsAll) {
       return true;
     }
-    const inTargets = this.isWithinTarget(fsPath);
-    if (inTargets) {
+    const inManual = this.isWithinManualFolder(fsPath);
+    const inMatchedRoot = this.isWithinMatchedRoot(fsPath);
+    if (inManual) {
+      return true;
+    }
+    if (inMatchedRoot) {
       return true;
     }
     if (!isDir && this.explicitFiles.has(fsPath)) {
@@ -489,12 +501,25 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
     return false;
   }
 
-  private isWithinTarget(candidate: string): boolean {
-    for (const folder of this.targetFolders) {
+  private isWithinManualFolder(candidate: string): boolean {
+    for (const folder of this.manualFolders) {
       if (candidate === folder) {
         return true;
       }
       const relative = path.relative(folder, candidate);
+      if (!relative.startsWith('..') && !path.isAbsolute(relative)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private isWithinMatchedRoot(candidate: string): boolean {
+    for (const root of this.matchedRoots) {
+      if (candidate === root) {
+        return true;
+      }
+      const relative = path.relative(root, candidate);
       if (!relative.startsWith('..') && !path.isAbsolute(relative)) {
         return true;
       }
@@ -627,7 +652,8 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
         if (!includeByScope) {
           continue;
         }
-        const allowAllDescendants = parentAllowsAll || this.isWithinTarget(childPath);
+        const allowAllDescendants =
+          parentAllowsAll || this.isWithinManualFolder(childPath) || this.isWithinMatchedRoot(childPath);
         children.push(this.createNode(childUri, isDir, parentDepth + 1, allowAllDescendants));
       }
       return this.sortNodes(children);
