@@ -41,7 +41,6 @@ function activate(context) {
     const provider = new FeatureScopeProvider_1.FeatureScopeProvider(context);
     const treeView = vscode.window.createTreeView('featureScope', {
         treeDataProvider: provider,
-        showCollapseAll: true,
         dragAndDropController: provider,
     });
     provider.setTreeView(treeView);
@@ -64,7 +63,7 @@ function registerCommands(context, provider, treeView) {
         if (value !== undefined) {
             provider.setFilter(value);
         }
-    }), vscode.commands.registerCommand('featureScope.clearFilter', () => provider.clearFilter()), vscode.commands.registerCommand('featureScope.toggleExactMatch', () => provider.toggleExactMatch()), vscode.commands.registerCommand('featureScope.clearAll', () => provider.clearAll()), vscode.commands.registerCommand('featureScope.addCurrentFile', () => {
+    }), vscode.commands.registerCommand('featureScope.clearFilter', () => provider.clearFilter()), vscode.commands.registerCommand('featureScope.toggleExactMatch', () => provider.toggleExactMatch()), vscode.commands.registerCommand('featureScope.collapseAll', () => provider.collapseAll()), vscode.commands.registerCommand('featureScope.expandAll', () => provider.expandAll()), vscode.commands.registerCommand('featureScope.clearAll', () => provider.clearAll()), vscode.commands.registerCommand('featureScope.addCurrentFile', () => {
         const uri = vscode.window.activeTextEditor?.document.uri;
         provider.addCurrentFile(uri);
     }), vscode.commands.registerCommand('featureScope.addFolder', (nodeOrUri) => {

@@ -37,6 +37,8 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
   private ancestors: Set<string> = new Set();
   private excludePatterns: string[] = [];
   private nodeCache: Map<string, FileNode> = new Map();
+  private expandedNodes: Set<string> = new Set();
+  private hasExpandedNodes: boolean | undefined;
 
   private view?: vscode.TreeView<FileNode>;
   private readonly changeEmitter = new vscode.EventEmitter<FileNode | undefined | null | void>();
@@ -51,6 +53,12 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
 
   setTreeView(view: vscode.TreeView<FileNode>): void {
     this.view = view;
+    const disposables = [
+      view.onDidExpandElement((e) => this.markExpanded(e.element)),
+      view.onDidCollapseElement((e) => this.markCollapsed(e.element)),
+    ];
+    this.context.subscriptions.push(...disposables);
+    this.updateExpansionContext();
     this.updateViewTitle();
   }
 
@@ -227,6 +235,8 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
 
   async refresh(): Promise<void> {
     this.nodeCache.clear();
+    this.expandedNodes.clear();
+    this.updateExpansionContext();
     if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
       vscode.window.showInformationMessage('Open folder first to use Feature Scope Explorer.');
       this.changeEmitter.fire();
@@ -234,6 +244,20 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
     }
     await this.calculateScope();
     this.changeEmitter.fire();
+  }
+
+  async collapseAll(): Promise<void> {
+    this.expandedNodes.clear();
+    this.updateExpansionContext();
+    await vscode.commands.executeCommand('workbench.actions.treeView.featureScope.collapseAll');
+  }
+
+  async expandAll(): Promise<void> {
+    if (!this.view) {
+      return;
+    }
+    const roots = await this.getChildren();
+    await this.expandNodesRecursive(roots);
   }
 
   async revealActiveEditor(editor: vscode.TextEditor | undefined): Promise<void> {
@@ -246,6 +270,7 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
     }
     try {
       await this.view.reveal(node, { select: true, focus: false, expand: true });
+      this.markExpanded(node);
     } catch {
       // Ignore reveal errors that can happen if the tree updates while revealing.
     }
@@ -307,6 +332,33 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
     const allowChildren = this.isWithinTarget(normalizedParent);
     const depth = Math.max(element.depth - 1, -1);
     return this.createNode(vscode.Uri.file(normalizedParent), true, depth, allowChildren);
+  }
+
+  private markExpanded(element: FileNode): void {
+    const key = this.normalize(element.uri.fsPath);
+    this.expandedNodes.add(key);
+    this.updateExpansionContext();
+  }
+
+  private markCollapsed(element: FileNode): void {
+    const key = this.normalize(element.uri.fsPath);
+    this.expandedNodes.delete(key);
+    for (const candidate of Array.from(this.expandedNodes)) {
+      const relative = path.relative(key, candidate);
+      if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
+        this.expandedNodes.delete(candidate);
+      }
+    }
+    this.updateExpansionContext();
+  }
+
+  private updateExpansionContext(): void {
+    const next = this.expandedNodes.size > 0;
+    if (this.hasExpandedNodes === next) {
+      return;
+    }
+    this.hasExpandedNodes = next;
+    void vscode.commands.executeCommand('setContext', 'featureScope.hasExpandedNodes', next);
   }
 
   private createNode(uri: vscode.Uri, isDirectory: boolean, depth: number, allowChildren = false): FileNode {
@@ -541,6 +593,22 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
       parentAllowsAll = next.allowChildren;
     }
     return lastNode;
+  }
+
+  private async expandNodesRecursive(nodes: FileNode[]): Promise<void> {
+    for (const node of nodes) {
+      if (!node.isDirectory) {
+        continue;
+      }
+      try {
+        await this.view?.reveal(node, { expand: true, focus: false, select: false });
+        this.markExpanded(node);
+      } catch {
+        // Ignore reveal errors that can happen if the tree updates while revealing.
+      }
+      const children = await this.getChildren(node);
+      await this.expandNodesRecursive(children);
+    }
   }
 
   private async getDirectoryChildren(uri: vscode.Uri, parentDepth: number, parentAllowsAll: boolean): Promise<FileNode[]> {

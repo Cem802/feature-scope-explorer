@@ -49,6 +49,16 @@
         "icon": "$(whole-word)"
       },
       {
+        "command": "featureScope.collapseAll",
+        "title": "Feature Scope: Collapse All",
+        "icon": "$(collapse-all)"
+      },
+      {
+        "command": "featureScope.expandAll",
+        "title": "Feature Scope: Expand All",
+        "icon": "$(expand-all)"
+      },
+      {
         "command": "featureScope.addCurrentFile",
         "title": "Feature Scope: Add Current File"
       },
@@ -133,6 +143,16 @@
           "command": "featureScope.deleteConfig",
           "when": "view == featureScope",
           "group": "navigation@9"
+        },
+        {
+          "command": "featureScope.collapseAll",
+          "when": "view == featureScope && featureScope.hasExpandedNodes",
+          "group": "navigation@99"
+        },
+        {
+          "command": "featureScope.expandAll",
+          "when": "view == featureScope && !featureScope.hasExpandedNodes",
+          "group": "navigation@99"
         }
       ],
       "view/item/context": [
