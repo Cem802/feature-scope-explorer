@@ -58,6 +58,7 @@ class FeatureScopeProvider {
     nodeCache = new Map();
     expandedNodes = new Set();
     hasExpandedNodes;
+    viewVisible = false;
     view;
     changeEmitter = new vscode.EventEmitter();
     onDidChangeTreeData = this.changeEmitter.event;
@@ -70,9 +71,16 @@ class FeatureScopeProvider {
     }
     setTreeView(view) {
         this.view = view;
+        this.viewVisible = view.visible;
         const disposables = [
             view.onDidExpandElement((e) => this.markExpanded(e.element)),
             view.onDidCollapseElement((e) => this.markCollapsed(e.element)),
+            view.onDidChangeVisibility((event) => {
+                this.viewVisible = event.visible;
+                if (event.visible) {
+                    void this.revealActiveEditor(vscode.window.activeTextEditor);
+                }
+            }),
         ];
         this.context.subscriptions.push(...disposables);
         this.updateExpansionContext();
@@ -261,7 +269,7 @@ class FeatureScopeProvider {
         await this.expandNodesRecursive(roots);
     }
     async revealActiveEditor(editor) {
-        if (!editor || editor.document.uri.scheme !== 'file' || !this.view) {
+        if (!editor || editor.document.uri.scheme !== 'file' || !this.view || !this.viewVisible) {
             return;
         }
         const node = await this.findNode(editor.document.uri);

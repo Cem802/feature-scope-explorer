@@ -40,6 +40,7 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
   private nodeCache: Map<string, FileNode> = new Map();
   private expandedNodes: Set<string> = new Set();
   private hasExpandedNodes: boolean | undefined;
+  private viewVisible = false;
 
   private view?: vscode.TreeView<FileNode>;
   private readonly changeEmitter = new vscode.EventEmitter<FileNode | undefined | null | void>();
@@ -54,9 +55,16 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
 
   setTreeView(view: vscode.TreeView<FileNode>): void {
     this.view = view;
+    this.viewVisible = view.visible;
     const disposables = [
       view.onDidExpandElement((e) => this.markExpanded(e.element)),
       view.onDidCollapseElement((e) => this.markCollapsed(e.element)),
+      view.onDidChangeVisibility((event) => {
+        this.viewVisible = event.visible;
+        if (event.visible) {
+          void this.revealActiveEditor(vscode.window.activeTextEditor);
+        }
+      }),
     ];
     this.context.subscriptions.push(...disposables);
     this.updateExpansionContext();
@@ -263,7 +271,7 @@ export class FeatureScopeProvider implements vscode.TreeDataProvider<FileNode>, 
   }
 
   async revealActiveEditor(editor: vscode.TextEditor | undefined): Promise<void> {
-    if (!editor || editor.document.uri.scheme !== 'file' || !this.view) {
+    if (!editor || editor.document.uri.scheme !== 'file' || !this.view || !this.viewVisible) {
       return;
     }
     const node = await this.findNode(editor.document.uri);
